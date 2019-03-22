@@ -22,11 +22,16 @@ import com.netflix.spinnaker.orca.ExecutionStatus
 import com.netflix.spinnaker.orca.clouddriver.KatoService
 import com.netflix.spinnaker.orca.clouddriver.model.TaskId
 import com.netflix.spinnaker.orca.jackson.OrcaObjectMapper
+import com.netflix.spinnaker.orca.pipeline.model.PipelineTrigger
 import com.netflix.spinnaker.orca.pipeline.model.Stage
 import com.netflix.spinnaker.orca.test.model.ExecutionBuilder
 import rx.Observable
 import spock.lang.Specification
 import spock.lang.Subject
+
+import static com.netflix.spinnaker.orca.ExecutionStatus.SUCCEEDED
+import static com.netflix.spinnaker.orca.test.model.ExecutionBuilder.pipeline
+import static com.netflix.spinnaker.orca.test.model.ExecutionBuilder.stage
 
 class CreateDeployTaskSpec extends Specification {
 
@@ -354,6 +359,153 @@ class CreateDeployTaskSpec extends Specification {
 
     where:
     amiName = "ami-name-from-bake"
+  }
+
+  def "getAncestors() returns stages in proper order when providers match"() {
+    given:
+
+    def parentExecution = pipeline {
+      stage {
+        type = "bake"
+        refId = "p1"
+        status = SUCCEEDED
+        outputs.putAll(
+          deploymentDetails: [
+            [
+              ami              : "ami-badbadbad",
+              imageId          : "ami-badbadbad",
+              amiSuffix        : "reallybad",
+              baseLabel        : "release",
+              baseOs           : "xenial",
+              storeType        : "ebs",
+              vmType           : "hvm",
+              region           : "us-east-1",
+              package          : "hordor",
+              cloudProviderType: "aws"
+            ]
+          ]
+        )
+
+      }
+    }
+
+    def trigger = new PipelineTrigger(parentExecution)
+
+    def pipeline = pipeline {
+      stage {
+        type = "findImage"
+        refId = "1"
+        status = SUCCEEDED
+        outputs.putAll(
+          deploymentDetails: [
+            [
+              ami              : "ami-goodgoodgood",
+              imageId          : "ami-goodgoodgood",
+              amiSuffix        : "reallygood",
+              baseLabel        : "release",
+              baseOs           : "xenial",
+              storeType        : "ebs",
+              vmType           : "hvm",
+              region           : "us-east-1",
+              package          : "hordor",
+              cloudProviderType: "aws"
+            ]
+          ]
+        )
+      }
+
+      stage {
+        type = "deploy"
+        refId = "2"
+        requisiteStageRefIds = [ "1" ]
+      }
+    }
+    pipeline.trigger = trigger
+
+    when:
+    def ancestors = task.getAncestors(pipeline.stageByRef("2"), pipeline)
+
+    then:
+    ancestors.size() == 2
+    ancestors.first().type == "findImage"
+    ancestors.last().type == "bake"
+  }
+
+  def "getAncestors() returns stages in proper order when providers do not match"() {
+    given:
+
+    def parentExecution = pipeline {
+      stage {
+        type = "bake"
+        refId = "p1"
+        status = SUCCEEDED
+        outputs.putAll(
+          deploymentDetails: [
+            [
+              ami              : "ami-badbadbad",
+              imageId          : "ami-badbadbad",
+              amiSuffix        : "reallybad",
+              baseLabel        : "release",
+              baseOs           : "xenial",
+              storeType        : "ebs",
+              vmType           : "hvm",
+              region           : "us-east-1",
+              package          : "hordor",
+              cloudProviderType: "aws"
+            ]
+          ]
+        )
+
+      }
+    }
+
+    def trigger = new PipelineTrigger(parentExecution)
+
+    def pipeline = pipeline {
+      stage {
+        type = "findImage"
+        refId = "1"
+        status = SUCCEEDED
+        outputs.putAll(
+          deploymentDetails: [
+            [
+              ami              : "ami-goodgoodgood",
+              imageId          : "ami-goodgoodgood",
+              amiSuffix        : "reallygood",
+              baseLabel        : "release",
+              baseOs           : "xenial",
+              storeType        : "ebs",
+              vmType           : "hvm",
+              region           : "us-east-1",
+              package          : "hordor",
+              cloudProviderType: "titus"
+            ]
+          ]
+        )
+      }
+
+      stage {
+        type = "deploy"
+        refId = "2"
+        requisiteStageRefIds = [ "1" ]
+        
+      }
+    }
+    pipeline.trigger = trigger
+
+    when:
+    def ancestors = task.getAncestors(pipeline.stageByRef("2"), pipeline)
+
+    then:
+    task.withImageFromDeploymentDetails(pipeline.stageByRef("2"), "us-east-1", "titus") {
+      def a = 1
+    }
+    task.withImageFromPrecedingStage(pipeline.stageByRef("2"), "us-east-1", "titus") {
+      def a = 1
+    }
+    ancestors.size() == 2
+    ancestors.first().type == "findImage"
+    ancestors.last().type == "bake"
   }
 
 }

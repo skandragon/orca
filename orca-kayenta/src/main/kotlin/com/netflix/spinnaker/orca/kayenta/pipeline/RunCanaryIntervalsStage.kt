@@ -26,7 +26,7 @@ import com.netflix.spinnaker.orca.kayenta.model.KayentaCanaryContext
 import com.netflix.spinnaker.orca.kayenta.model.RunCanaryContext
 import com.netflix.spinnaker.orca.pipeline.StageDefinitionBuilder
 import com.netflix.spinnaker.orca.pipeline.TaskNode
-import com.netflix.spinnaker.orca.pipeline.WaitStage
+import com.netflix.spinnaker.orca.pipeline.WaitUntilStage
 import com.netflix.spinnaker.orca.pipeline.graph.StageGraphBuilder
 import com.netflix.spinnaker.orca.pipeline.model.Stage
 import org.springframework.stereotype.Component
@@ -49,9 +49,9 @@ class RunCanaryIntervalsStage(private val clock: Clock) : StageDefinitionBuilder
   override fun beforeStages(parent: Stage, graph: StageGraphBuilder) {
     val canaryConfig = parent.mapTo<KayentaCanaryContext>("/canaryConfig")
 
+    var startTime = canaryConfig.startTime ?: Instant.now(clock)
     val lifetime: Duration = if (canaryConfig.endTime != null) {
-      Duration.ofMinutes((canaryConfig.startTime ?: Instant.now(clock))
-        .until(canaryConfig.endTime, ChronoUnit.MINUTES))
+      Duration.ofMinutes(startTime.until(canaryConfig.endTime, ChronoUnit.MINUTES))
     } else if (canaryConfig.lifetime != null) {
       canaryConfig.lifetime
     } else {
@@ -64,10 +64,11 @@ class RunCanaryIntervalsStage(private val clock: Clock) : StageDefinitionBuilder
     }
 
     if (canaryConfig.beginCanaryAnalysisAfter > Duration.ZERO) {
+      startTime += canaryConfig.beginCanaryAnalysisAfter
       graph.append {
-        it.type = WaitStage.STAGE_TYPE
+        it.type = WaitUntilStage.STAGE_TYPE
         it.name = "Warmup Wait"
-        it.context["waitTime"] = canaryConfig.beginCanaryAnalysisAfter.seconds
+        it.context["waitUntil"] = startTime.toEpochMilli()
       }
     }
 
@@ -76,11 +77,12 @@ class RunCanaryIntervalsStage(private val clock: Clock) : StageDefinitionBuilder
     for (i in 1..numIntervals) {
       // If an end time was explicitly specified, we don't need to synchronize
       // the execution of the canary pipeline with the real time.
+      startTime += canaryAnalysisInterval
       if (canaryConfig.endTime == null) {
         graph.append {
-          it.type = WaitStage.STAGE_TYPE
+          it.type = WaitUntilStage.STAGE_TYPE
           it.name = "Interval Wait #$i"
-          it.context["waitTime"] = canaryAnalysisInterval.seconds
+          it.context["waitUntil"] = startTime.toEpochMilli()
         }
       }
 
